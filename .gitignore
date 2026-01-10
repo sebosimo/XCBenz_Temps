@@ -1,4 +1,3 @@
-```text
 # Python environment
 __pycache__/
 *.py[cod]
@@ -7,9 +6,12 @@ venv/
 
 # Data and Outputs
 data/
-*.png
 *.log
 *.csv
+
+# Keep weather data for the Web App
+!cache_data/
+!cache_data/*.nc
 
 # Keep locations.json but ignore other local json files
 *.json
