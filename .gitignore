@@ -1,0 +1,16 @@
+```text
+# Python environment
+__pycache__/
+*.py[cod]
+venv/
+.env
+
+# Data and Outputs
+data/
+*.png
+*.log
+*.csv
+
+# Keep locations.json but ignore other local json files
+*.json
+!locations.json
