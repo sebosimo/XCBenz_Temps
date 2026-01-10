@@ -29,6 +29,7 @@ def get_location_indices(ds, locations):
     for name, coords in locations.items():
         # Euclidean distance to find nearest grid point
         dist = (grid_lat - coords['lat'])**2 + (grid_lon - coords['lon'])**2
+        # unravel_index returns a tuple: (idx,) for 1D or (y, x) for 2D
         idx = np.unravel_index(np.argmin(dist), dist.shape)
         indices[name] = idx
     return indices
@@ -46,14 +47,12 @@ def main():
     base_hour = (now.hour // 3) * 3
     ref_time = now.replace(hour=base_hour, minute=0, second=0, microsecond=0)
     
-    # Logic for max horizon: 03 UTC run goes to 45h, others to 33h
     max_h = 45 if ref_time.hour == 3 else 33
     horizons = range(0, max_h + 1, 2)
     time_tag = ref_time.strftime('%Y%m%d_%H%M')
 
     print(f"--- ICON-CH1 Run: {time_tag} | Max Horizon: {max_h}h ---")
 
-    # Indices are cached once the first file of the run is opened
     cached_indices = None
 
     # 2. Main Loop: Iterate by Horizon (Lead Time)
@@ -61,8 +60,6 @@ def main():
         iso_h = get_iso_horizon(h_int)
         valid_time = ref_time + datetime.timedelta(hours=h_int)
         
-        # Check if we actually need to download this horizon 
-        # (Check if at least one location is missing this file)
         locations_to_process = []
         for name in locations.keys():
             path = os.path.join(CACHE_DIR, f"{name}_{time_tag}_H{h_int:02d}.nc")
@@ -72,7 +69,7 @@ def main():
         if not locations_to_process:
             continue
 
-        print(f"\nHorizon +{h_int:02d}h: Fetching domain fields for {len(locations_to_process)} locations...")
+        print(f"\nHorizon +{h_int:02d}h: Fetching domain fields...")
         
         domain_fields = {}
         hum_type_found = None
@@ -80,29 +77,18 @@ def main():
         try:
             # A. Fetch Core Variables (Full Domain)
             for var in CORE_VARS:
-                req = ogd_api.Request(
-                    collection="ogd-forecasting-icon-ch1", 
-                    variable=var,
-                    reference_datetime=ref_time, 
-                    horizon=iso_h, 
-                    perturbed=False
-                )
+                req = ogd_api.Request(collection="ogd-forecasting-icon-ch1", variable=var,
+                                     reference_datetime=ref_time, horizon=iso_h, perturbed=False)
                 domain_fields[var] = ogd_api.get_from_ogd(req)
             
-            # B. Fetch Humidity (Try RELHUM, then QV)
+            # B. Fetch Humidity
             for hv in HUM_VARS:
                 try:
-                    req_h = ogd_api.Request(
-                        collection="ogd-forecasting-icon-ch1", 
-                        variable=hv,
-                        reference_datetime=ref_time, 
-                        horizon=iso_h, 
-                        perturbed=False
-                    )
+                    req_h = ogd_api.Request(collection="ogd-forecasting-icon-ch1", variable=hv,
+                                           reference_datetime=ref_time, horizon=iso_h, perturbed=False)
                     res_h = ogd_api.get_from_ogd(req_h)
                     if res_h is not None:
-                        domain_fields["HUM"] = res_h
-                        hum_type_found = hv
+                        domain_fields["HUM"], hum_type_found = res_h, hv
                         break
                 except: continue
 
@@ -121,17 +107,35 @@ def main():
 
                 loc_data = {}
                 for var_name, ds_field in domain_fields.items():
-                    # Handle native ICON grid (cell) vs regular grid (y, x)
-                    if 'cell' in ds_field.dims:
-                        subset = ds_field.isel(cell=idx[0])
-                    else:
-                        subset = ds_field.isel(y=idx[0], x=idx[1])
                     
-                    # FORCE SQUEEZE: This removes the 'number' (ensemble) dimension
-                    # Crucial to prevent IndexErrors in plotting
+                    # --- DIAGNOSTIC & ROBUST EXTRACTION ---
+                    # We look for ANY dimension that might be the spatial one
+                    possible_dims = ['cell', 'ncells', 'values', 'index', 'node']
+                    spatial_dim = None
+                    for d in possible_dims:
+                        if d in ds_field.dims:
+                            spatial_dim = d
+                            break
+                    
+                    # Log what we found for the first location to debug the +04h crash
+                    if name == locations_to_process[0] and var_name == CORE_VARS[0]:
+                        print(f"  DEBUG [+{h_int}h]: Dims={list(ds_field.dims)} | Found Spatial Dim={spatial_dim} | Index Tuple={idx}")
+
+                    if spatial_dim and len(idx) == 1:
+                        # Success: We found a 1D spatial dimension and have a 1D index
+                        subset = ds_field.isel({spatial_dim: idx[0]})
+                    elif not spatial_dim and len(idx) == 2:
+                        # Success: We didn't find a 1D dim, but we have 2D indices (y, x)
+                        subset = ds_field.isel(y=idx[0], x=idx[1])
+                    else:
+                        # Failure: The index shape doesn't match the dimension names
+                        # We try a 'brute force' approach: pick the dimension with the largest size
+                        fallback_dim = max(ds_field.dims, key=lambda d: ds_field.dims[d])
+                        subset = ds_field.isel({fallback_dim: idx[0]})
+
                     loc_data[var_name] = subset.squeeze().compute()
 
-                # Merge into unified dataset
+                # Merge and Save
                 ds_final = xr.Dataset(loc_data)
                 ds_final.attrs = {
                     "location": name,
@@ -141,7 +145,7 @@ def main():
                     "valid_time": valid_time.isoformat()
                 }
 
-                # Wipe attributes that cause GRIB/NetCDF conversion conflicts
+                # Wipe attributes
                 for v in ds_final.data_vars: ds_final[v].attrs = {}
                 for c in ds_final.coords: ds_final[c].attrs = {}
 
