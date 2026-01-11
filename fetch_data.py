@@ -1,6 +1,5 @@
 import os, sys, datetime, json, xarray as xr
 import numpy as np
-import traceback # Added for sound data
 from meteodatalab import ogd_api
 
 # --- Configuration ---
@@ -13,66 +12,106 @@ def get_iso_horizon(total_hours):
     hours = total_hours % 24
     return f"P{days}DT{hours}H"
 
-def main():
-    if not os.path.exists("locations.json"):
-        print("ERROR: locations.json missing", flush=True)
-        return
-    with open("locations.json", "r") as f:
-        locations = json.load(f)
+def is_run_complete_locally(time_tag, locations, max_h):
+    """Checks if the last file of a run exists locally."""
+    last_loc = list(locations.keys())[-1]
+    check_file = os.path.join(CACHE_DIR, f"{last_loc}_{time_tag}_H{max_h:02d}.nc")
+    return os.path.exists(check_file)
 
-    # Calculate latest run
+def main():
+    if not os.path.exists("locations.json"): return
+    with open("locations.json", "r") as f: locations = json.load(f)
+
     now = datetime.datetime.now(datetime.timezone.utc)
     base_hour = (now.hour // 3) * 3
-    ref_time = now.replace(hour=base_hour, minute=0, second=0, microsecond=0)
+    latest_run = now.replace(hour=base_hour, minute=0, second=0, microsecond=0)
     
-    # Check if the run is too fresh (less than 90 mins old)
-    # ICON-CH1 usually takes ~1.5 hours to start appearing on OGD
-    time_since_run = (now - ref_time).total_seconds() / 60
-    print(f"--- RUN INFO ---", flush=True)
-    print(f"Target Run: {ref_time.strftime('%Y-%m-%d %H:%M')} UTC", flush=True)
-    print(f"Time since run start: {time_since_run:.1f} minutes", flush=True)
+    # Target A (Latest) and Target B (Previous)
+    targets = [latest_run, latest_run - datetime.timedelta(hours=3)]
+    
+    selected_run = None
+    
+    print("--- CHECKING FOR AVAILABLE RUNS ---")
+    for run in targets:
+        tag = run.strftime('%Y%m%d_%H%M')
+        max_h = 45 if run.hour == 3 else 33
+        
+        # 1. Do we already have this run?
+        if is_run_complete_locally(tag, locations, max_h):
+            print(f"Run {tag}: ✅ Already fully cached.")
+            # If we already have the latest target, we stop entirely
+            if run == targets[0]:
+                print("Everything is up to date.")
+                return
+            continue # If we have the old run but not the new one, keep checking the new one
+            
+        # 2. If we don't have it, is it ready on the server?
+        try:
+            req = ogd_api.Request(collection="ogd-forecasting-icon-ch1", variable="T",
+                                 reference_datetime=run, horizon="P0DT0H", perturbed=False)
+            if ogd_api.get_from_ogd(req) is not None:
+                print(f"Run {tag}: ✨ NEW DATA READY! Selecting this run.")
+                selected_run = run
+                break # We found the newest possible run that is ready to download
+            else:
+                print(f"Run {tag}: ❌ Files not found on server yet.")
+        except (IndexError, Exception):
+            print(f"Run {tag}: ❌ Server says 'not ready' (IndexError).")
 
-    horizons = range(0, 33, 2)
+    if not selected_run:
+        print("RESULT: No new runs to download at this time.")
+        return
+
+    # --- START DOWNLOAD FOR SELECTED RUN ---
+    ref_time = selected_run
     time_tag = ref_time.strftime('%Y%m%d_%H%M')
+    max_h = 45 if ref_time.hour == 3 else 33
+    horizons = range(0, max_h + 1, 2)
+    
+    print(f"\n--- PROCESSING RUN: {time_tag} ---")
+    cached_indices = None
 
     for h_int in horizons:
         iso_h = get_iso_horizon(h_int)
-        print(f"\n>>> ATTEMPTING STEP: +{h_int}h ({iso_h})", flush=True)
+        valid_time = ref_time + datetime.timedelta(hours=h_int)
         
         try:
-            # 1. FETCH - This is where the crash happens
-            print(f"DEBUG: Calling ogd_api.get_from_ogd for variable 'T'...", flush=True)
-            req = ogd_api.Request(collection="ogd-forecasting-icon-ch1", 
-                                 variable="T",
-                                 reference_datetime=ref_time, 
-                                 horizon=iso_h, 
-                                 perturbed=False)
+            domain_fields = {}
+            for var in CORE_VARS:
+                req = ogd_api.Request(collection="ogd-forecasting-icon-ch1", variable=var,
+                                     reference_datetime=ref_time, horizon=iso_h, perturbed=False)
+                domain_fields[var] = ogd_api.get_from_ogd(req)
             
-            # This call downloads and indexes the GRIB
-            ds_t = ogd_api.get_from_ogd(req)
-            
-            if ds_t is None:
-                print(f"RESULT: API returned None (Data not ready yet).", flush=True)
-                continue
-                
-            print(f"RESULT: Successfully fetched T. Dims: {list(ds_t.dims)}", flush=True)
-            
-            # If T works, we would proceed to others...
-            # For this diagnostic, we stop here if successful to save time
-            print(f"DEBUG: Data for this step is healthy. Moving to next check.", flush=True)
+            if cached_indices is None:
+                sample = domain_fields["T"]
+                lat_n = 'latitude' if 'latitude' in sample.coords else 'lat'
+                lon_n = 'longitude' if 'longitude' in sample.coords else 'lon'
+                lats, lons = sample[lat_n].values, sample[lon_n].values
+                cached_indices = {n: int(np.argmin((lats-c['lat'])**2+(lons-c['lon'])**2)) for n, c in locations.items()}
 
-        except Exception:
-            print(f"\n!!! CAPTURED CRITICAL TRACEBACK !!!", flush=True)
-            # THIS IS THE SOUND DATA: It prints the exact line in the library that failed
-            traceback.print_exc(file=sys.stdout)
-            print(f"!!! END OF TRACEBACK !!!\n", flush=True)
+            for name, flat_idx in cached_indices.items():
+                cache_path = os.path.join(CACHE_DIR, f"{name}_{time_tag}_H{h_int:02d}.nc")
+                if os.path.exists(cache_path): continue
+
+                loc_vars = {}
+                for var_name, ds_full in domain_fields.items():
+                    lat_coord = 'latitude' if 'latitude' in ds_full.coords else 'lat'
+                    spatial_dim = ds_full[lat_coord].dims[0]
+                    profile = ds_full.squeeze().isel({spatial_dim: flat_idx}).compute()
+                    loc_vars[var_name] = profile.drop_vars([c for c in profile.coords if c not in profile.dims])
+
+                ds_final = xr.Dataset(loc_vars)
+                ds_final.attrs = {"location": name, "HUM_TYPE": "QV", "ref_time": ref_time.isoformat(), 
+                                 "horizon_h": h_int, "valid_time": valid_time.isoformat()}
+                
+                for v in ds_final.data_vars: ds_final[v].attrs = {}
+                ds_final.to_netcdf(cache_path)
             
-            # If the error is an IndexError, it's almost certainly a "Not Ready" issue on the server
-            if isinstance(sys.exc_info()[1], IndexError):
-                print("INTERPRETATION: The GRIB file likely exists but is empty or has a broken header (Incomplete Upload).", flush=True)
-            
-            # Stop the script so we don't spam the log
-            sys.exit(1)
+            print(f"  [OK] Horizon +{h_int}h")
+
+        except Exception as e:
+            print(f"  [WAIT] Horizon +{h_int}h not ready yet. Stopping here to resume later.")
+            break 
 
 if __name__ == "__main__":
     main()
