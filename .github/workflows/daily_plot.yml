@@ -8,43 +8,72 @@ on:
         type: boolean
         default: false
   schedule:
+    # Runs every 3 hours (aligned with ICON-CH1 updates)
     - cron: '45 */3 * * *'
 
 jobs:
-  update-data:
+  run-plot:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write # Crucial for pushing data back to the repo
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
+        with:
+          fetch-depth: 0 # Fetch all history so we can push back
+      
+      # 1. Setup uv
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
+          cache-dependency-path: "requirements.txt"
 
+      # 2. System Dependencies
       - name: Install System Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libeccodes-dev
 
+      # 3. Install Python Dependencies
       - name: Install Python Dependencies
-        run: uv pip install -r requirements.txt
+        run: |
+          uv venv
+          uv pip install -r requirements.txt
 
-      - name: Fetch Weather Data
+      # 4. Fetch Data
+      - name: Fetch Data
         env:
           FORCE_REFRESH: ${{ github.event.inputs.force_refresh }}
         run: uv run python fetch_data.py
 
+      # 5. Plot Step
+      - name: Generate Plots
+        run: uv run python plot_skewt.py
+
+      # 6. Upload Resulting Plots (Corrected path)
+      - name: Upload Plots Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: skewt-plots
+          path: plots/  # Fixed: looking inside the plots folder
+          retention-days: 3
+
+      # 7. Commit and Push Data for Streamlit App
       - name: Commit and Push Data
         run: |
           git config --global user.name "GitHub Action"
           git config --global user.email "actions@github.com"
+          
+          # Ensure cache_data exists
           mkdir -p cache_data
+          
+          # Delete .nc files older than 3 days to keep repo light
           find cache_data -name "*.nc" -mtime +3 -delete || true
+          
           git add cache_data/
+          
           if [ -n "$(git status --porcelain)" ]; then
             git commit -m "Auto-update weather data: $(date -u +'%Y-%m-%d %H:%M') UTC"
             git push
