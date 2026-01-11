@@ -8,7 +8,6 @@ on:
         type: boolean
         default: false
   schedule:
-    # Runs every 3 hours (aligned with ICON-CH1 updates)
     - cron: '45 */3 * * *'
 
 jobs:
@@ -34,14 +33,14 @@ jobs:
           sudo apt-get install -y libeccodes-dev
 
       - name: Install Python Dependencies
-        run: uv pip install -r requirements.txt
+        run: |
+          uv venv
+          uv pip install -r requirements.txt
 
       - name: Fetch Weather Data
         env:
           FORCE_REFRESH: ${{ github.event.inputs.force_refresh }}
         run: uv run python fetch_data.py
-
-      # (Sections 5 & 6 removed - Plots will be handled by the Web App)
 
       - name: Commit and Push Data
         run: |
@@ -49,7 +48,7 @@ jobs:
           git config --global user.email "actions@github.com"
           
           mkdir -p cache_data
-          # Cleanup: keep only 2 days of data to keep the repository fast
+          # Keep 2 days of data
           find cache_data -name "*.nc" -mtime +2 -delete || true
           
           git add cache_data/
