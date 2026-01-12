@@ -5,3 +5,4 @@ meteodata-lab
 pandas
 matplotlib
 netCDF4
+streamlit
