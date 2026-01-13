@@ -23,6 +23,17 @@ jobs:
       contents: write
     
     steps:
+          # --- NEW STEP: FREE UP DISK SPACE ---
+      - name: Free Disk Space
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: false
       - name: Checkout repository
         uses: actions/checkout@v4
         with:

@@ -12,7 +12,7 @@
   "Airolo": {"lat": 46.53, "lon": 8.61},
   "Sondrio": {"lat": 46.17, "lon": 9.87},
   "Chur": {"lat": 46.85, "lon": 9.53},
-  "Samaden": {"lat": 46.53, "lon": 9.87},
+  "Samedan": {"lat": 46.53, "lon": 9.87},
   "Klosters": {"lat": 46.86, "lon": 9.88},
   "Disentis": {"lat": 46.70, "lon": 8.85},
   "Mals": {"lat": 46.68, "lon": 10.55},
@@ -22,7 +22,7 @@
   "Interlaken": {"lat": 46.68, "lon": 7.85},
   "Gstaad": {"lat": 46.47, "lon": 7.28},
   "Bulle": {"lat": 46.62, "lon": 7.05},
-  "ST imier": {"lat": 47.15, "lon": 7.00},
+  "Saint-Imier": {"lat": 47.15, "lon": 7.00},
   "Pontarlier": {"lat": 46.90, "lon": 6.35},
   "Chamonix": {"lat": 45.92, "lon": 6.87},
   "Annecy": {"lat": 45.90, "lon": 6.13},
@@ -31,5 +31,5 @@
   "Heidelberg": {"lat": 49.41, "lon": 8.67},
   "Regensburg": {"lat": 49.02, "lon": 12.10},
   "Reims": {"lat": 49.25, "lon": 4.03},
-  "dijon": {"lat": 47.32, "lon": 5.04}
+  "Dijon": {"lat": 47.32, "lon": 5.04}
 }
