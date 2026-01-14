@@ -223,7 +223,8 @@ else:
         valid_dt = datetime.datetime.fromisoformat(ds.attrs["valid_time"])
         swiss_dt = valid_dt + datetime.timedelta(hours=1) # Winter time correction
 
-        st.subheader(f"{selected_loc} {swiss_dt.strftime('%A %H:%M')} (LT)")
+        # You can change '20px' to whatever size you want
+        st.markdown(f"<h3 style='font-size: 20px; margin: 0;'>{selected_loc} {swiss_dt.strftime('%A %H:%M')} (LT)</h3>", unsafe_allow_html=True)
         
         # --- THE PLOT ---
         with st.spinner("Generating Emagram..."):
