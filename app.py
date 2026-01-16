@@ -89,18 +89,30 @@ def render_time_height_plot(run_folder, location):
     times = []
     heights_list = []
     temps_list = []
+    dewpoints_list = []
+    u_list = []
+    v_list = []
     
     for f in files:
         try:
             ds = xr.open_dataset(f)
             p = ds["P"].values * units.Pa
             t = (ds["T"].values * units.K).to(units.degC)
+            t_kelvin = ds["T"].values * units.K
+            t = t_kelvin.to(units.degC)
+            qv = ds["QV"].values * units('kg/kg')
+            u_val = (ds["U"].values * units('m/s')).to('km/h').m
+            v_val = (ds["V"].values * units('m/s')).to('km/h').m
+            td = mpcalc.dewpoint_from_specific_humidity(p, t_kelvin, qv).to(units.degC)
             z = mpcalc.pressure_to_height_std(p).to(units.km).m
             vt = datetime.datetime.fromisoformat(ds.attrs["valid_time"])
             
             times.append(vt)
             heights_list.append(z)
             temps_list.append(t.m)
+            dewpoints_list.append(td.m)
+            u_list.append(u_val)
+            v_list.append(v_val)
         except:
             continue
 
@@ -108,39 +120,101 @@ def render_time_height_plot(run_folder, location):
 
     reg_z = np.arange(0, 7.05, 0.05) 
     reg_t = np.zeros((len(reg_z), len(times)))
+    reg_td = np.zeros((len(reg_z), len(times)))
+    reg_u = np.zeros((len(reg_z), len(times)))
+    reg_v = np.zeros((len(reg_z), len(times)))
     
     for i in range(len(times)):
         z_col = heights_list[i]
         t_col = temps_list[i]
+        td_col = dewpoints_list[i]
+        u_col = u_list[i]
+        v_col = v_list[i]
         sort_idx = np.argsort(z_col)
         reg_t[:, i] = np.interp(reg_z, z_col[sort_idx], t_col[sort_idx])
+        reg_td[:, i] = np.interp(reg_z, z_col[sort_idx], td_col[sort_idx])
+        reg_u[:, i] = np.interp(reg_z, z_col[sort_idx], u_col[sort_idx])
+        reg_v[:, i] = np.interp(reg_z, z_col[sort_idx], v_col[sort_idx])
 
     dt_dz = -np.gradient(reg_t, axis=0) / 0.05 
     lapse_rate = dt_dz
 
-    fig, ax = plt.subplots(figsize=(12, 6))
+    # --- MASKING & TERRAIN ---
+    surface_heights = [np.min(h) for h in heights_list]
+    mask = np.zeros_like(lapse_rate, dtype=bool)
+    for i, s_h in enumerate(surface_heights):
+        mask[:, i] = reg_z < s_h
+    lapse_rate_masked = np.ma.masked_where(mask, lapse_rate)
+
+    fig, ax = plt.subplots(figsize=(12, 8))
     time_nums = mdates.date2num(times)
     X, Y = np.meshgrid(time_nums, reg_z)
     
     levels = np.linspace(3, 9, 100)
     cmap = plt.get_cmap("RdYlGn") 
     
-    c = ax.contourf(X, Y, lapse_rate, levels=levels, cmap=cmap, extend='both')
+    c = ax.contourf(X, Y, lapse_rate_masked, levels=levels, cmap=cmap, extend='both')
+    
+    # Cloud Overlay (T - Td < 1.0°C)
+    depression = reg_t - reg_td
+    depression_masked = np.ma.masked_where(mask, depression)
+    ax.contourf(X, Y, depression_masked, levels=[-100, 1.0], colors=['#778899'], alpha=0.6)
+    
+    # Wind Barbs Overlay
+    reg_u_masked = np.ma.masked_where(mask, reg_u)
+    reg_v_masked = np.ma.masked_where(mask, reg_v)
+    
+    skip_z = 10  # Every 500m (0.05 * 10)
+    skip_t = 2   # Every 2nd time step
+    ax.barbs(X[::skip_z, ::skip_t], Y[::skip_z, ::skip_t], 
+             reg_u_masked[::skip_z, ::skip_t], reg_v_masked[::skip_z, ::skip_t],
+             length=5, color='#444444', alpha=0.5, linewidth=0.8)
     
     ax.xaxis_date()
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%a %H:%M'))
+    # Terrain Fill
+    ax.fill_between(time_nums, 0, surface_heights, color='#e0e0e0', zorder=2)
+    
+    # X-Axis Formatting
+    ax.xaxis.set_major_locator(mdates.HourLocator(interval=3))
+    ax.xaxis.set_minor_locator(mdates.HourLocator(interval=1))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+    
+    # Day Labels
+    unique_days = sorted(list(set(t.date() for t in times)))
+    for day in unique_days:
+        # Draw vertical line at midnight to separate days
+        midnight = datetime.datetime.combine(day, datetime.time.min)
+        if times[0].tzinfo:
+            midnight = midnight.replace(tzinfo=times[0].tzinfo)
+        if times[0] <= midnight <= times[-1]:
+            ax.plot([mdates.date2num(midnight)]*2, [-0.08, -0.04], color='black', linewidth=1, transform=ax.get_xaxis_transform(), clip_on=False)
+
+        day_times = [t for t in times if t.date() == day]
+        if not day_times: continue
+        
+        if len(day_times) == 1 and day_times[0] == times[-1]:
+            continue
+
+        t_mid = (mdates.date2num(day_times[0]) + mdates.date2num(day_times[-1])) / 2
+        ax.text(t_mid, -0.06, day.strftime('%a %d'), transform=ax.get_xaxis_transform(), 
+                ha='center', va='top', fontweight='bold', fontsize=12)
+
     ax.set_ylim(0, 7)
     ax.set_ylabel("Altitude (km)", fontsize=14)
     ax.tick_params(axis='both', labelsize=13)
+    ax.tick_params(axis='both', labelsize=12)
     
     cbar = plt.colorbar(c, ax=ax)
+    #cbar.set_label("Lapse Rate (°C/km)", fontsize=12)
     cbar.set_ticks([3, 6, 9])
-    cbar.set_ticklabels(['Stable/Inv (<3°C)', '6°C', 'Good (>9°C)'])
+    cbar.ax.set_yticklabels(['Stable (<0.3°C)', '0.6°C', 'Good (>0.9°C)'], rotation=270, va='center')
     cbar.ax.tick_params(labelsize=13)
     
     ax.grid(True, alpha=0.3, linestyle='--')
     plt.tight_layout()
     plt.subplots_adjust(top=0.98)
+    plt.subplots_adjust(bottom=0.15, top=0.98)
     return fig
 
 @st.cache_data
@@ -268,7 +342,7 @@ else:
         st.subheader(f"{selected_loc} {swiss_dt.strftime('%A %H:%M')} (LT)")
         
         # --- TABS LOGIC ---
-        tab1, tab2 = st.tabs(["📈 Sounding (Detail)", "📅 Time-Height (Overview)"])
+        tab1, tab2 = st.tabs(["📈 Sounding-Wind", "📅 Lapsrate-Time"])
         
         with tab1:
             with st.spinner("Generating Emagram..."):
@@ -281,11 +355,21 @@ else:
             with nav2:
                 st.button("Next ▸", on_click=next_step, use_container_width=True)
 
+            def format_slider(option):
+                try:
+                    base = datetime.datetime.strptime(selected_run, '%Y%m%d_%H%M')
+                    hrs = int(option.replace("H", ""))
+                    target = base + datetime.timedelta(hours=hrs + 1)
+                    return target.strftime('%a %H:%M')
+                except:
+                    return option
+
             st.select_slider(
                 "Forecast Hour", 
                 options=slider_horizons, 
                 key="slider_key",
                 label_visibility="collapsed",
+                format_func=format_slider,
                 on_change=slider_callback
             )
 
