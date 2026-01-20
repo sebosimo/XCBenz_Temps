@@ -194,23 +194,8 @@ def main():
     max_h = 45 if ref_time.hour == 3 else 33
     horizons = range(0, max_h + 1, 1)
     
-    # --- 1. Fetch HHL Once (Topology) ---
-    print("Fetching HHL (Topology)...", end=" ", flush=True)
+    # HHL State - Lazy Load
     hhl_field = None
-    try:
-        # HHL is time-invariant essentially, or at least 'Analysis' (Horizon 0) is sufficient.
-        req_hhl = ogd_api.Request(collection="ogd-forecasting-icon-ch1", variable="HHL",
-                             reference_datetime=ref_time, horizon="P0DT0H", perturbed=False)
-        hhl_field = ogd_api.get_from_ogd(req_hhl)
-        if hhl_field is not None:
-             print("Done")
-        else:
-             print("Failed (None)")
-    except Exception as e:
-        print(f"Failed ({e})")
-
-    if hhl_field is None:
-        print("Warning: Could not download HHL. Wind maps will NOT be generated.")
 
     print(f"\n--- PROCESSING RUN: {time_tag} ---")
     
@@ -238,6 +223,19 @@ def main():
         
         domain_fields = {}
         
+        # Try to fetch HHL if missing and needed for maps
+        if maps_needed and hhl_field is None:
+             try:
+                # Try fetching HHL with current horizon
+                req_hhl = ogd_api.Request(collection="ogd-forecasting-icon-ch1", variable="HHL",
+                                     reference_datetime=ref_time, horizon=iso_h, perturbed=False)
+                res_hhl = ogd_api.get_from_ogd(req_hhl)
+                if res_hhl is not None:
+                    hhl_field = res_hhl
+                    # print("(Captured HHL)", end=" ")
+             except Exception:
+                pass
+
         # Inject HHL if available
         if hhl_field is not None:
             domain_fields["HHL"] = hhl_field
