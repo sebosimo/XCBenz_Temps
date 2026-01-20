@@ -235,6 +235,11 @@ def main():
                     # print("(Captured HHL)", end=" ")
              except Exception:
                 pass
+             
+             if hhl_field is not None:
+                print(" -> Captured HHL! ", end="")
+             else:
+                print(" -> HHL missing ", end="")
 
         # Inject HHL if available
         if hhl_field is not None:
@@ -265,6 +270,12 @@ def main():
                  # Check HHL/Wind
                  if hhl_field is not None and "U" in domain_fields and "V" in domain_fields:
                      process_wind_maps(domain_fields, time_tag, h_int, ref_time)
+                 else:
+                     missing = []
+                     if hhl_field is None: missing.append("HHL")
+                     if "U" not in domain_fields: missing.append("U")
+                     if "V" not in domain_fields: missing.append("V")
+                     print(f"[Skip Maps: Missing {','.join(missing)}]", end=" ")
             
             print("Done")
         else:
