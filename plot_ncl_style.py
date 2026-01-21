@@ -30,11 +30,12 @@ hex_colors = [
     "#C00000", # 70-80 (Dark Red)
     "#800040", # 80-90 (Purple-Red)
     "#600060", # 90-100 (Purple)
+    "#600060", # > 100 (Purple - Extension)
 ]
 
 try:
     NCL_CMAP = mcolors.ListedColormap(hex_colors)
-    NCL_CMAP.set_over("#600060") # Extend with last color
+    NCL_CMAP.set_over("#600060") # Explicitly set over (redundant but safe)
 except:
     NCL_CMAP = 'turbo'
 
