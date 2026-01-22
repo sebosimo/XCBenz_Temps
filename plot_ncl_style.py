@@ -43,6 +43,7 @@ from scipy.interpolate import griddata
 import os
 import glob
 from datetime import datetime, timedelta
+import re
 
 # Configuration
 CACHE_DIR = "cache_wind"
@@ -134,41 +135,141 @@ def plot_single_level(u_grid, v_grid, lon_grid, lat_grid, level_name, time_str, 
                      transform=ccrs.PlateCarree(), 
                      extend='max')
     
-    # Streamplot (Vectors)
-    # "Hairy" look: High density, thin lines, small arrows.
-    ax.streamplot(lon_grid, lat_grid, u_grid, v_grid, 
-                  transform=ccrs.PlateCarree(), 
+    # Vectors: Streamlines with Variable Density
+    # Strategy: Seed points based on wind speed.
+    # Manually project grid and vectors to Mercator for Streamplot
+    # This avoids issues where start_points (in PlateCarree) are not correctly transformed by Cartopy
+    proj = ccrs.Mercator()
+    
+    # Project grid points
+    pts_proj = proj.transform_points(ccrs.PlateCarree(), lon_grid, lat_grid)
+    
+    # Extract 1D axes for streamplot (rectilinear grid)
+    # Mercator projection of a Lat/Lon regular grid results in a rectilinear grid (separable x and y)
+    x_grid_1d = pts_proj[0, :, 0] # Shape (N_lon,)
+    y_grid_1d = pts_proj[:, 0, 1] # Shape (N_lat,)
+    
+    # Full 2D grid for seed selection
+    x_grid_2d = pts_proj[:,:,0]
+    y_grid_2d = pts_proj[:,:,1]
+    
+    # Project vectors
+    u_proj, v_proj = proj.transform_vectors(ccrs.PlateCarree(), lon_grid, lat_grid, u_grid, v_grid)
+    
+    # Calculate speed from projected vectors for linewidth (should be similar magnitude)
+    speed_proj = np.sqrt(u_proj**2 + v_proj**2) * 3.6 # km/h
+    
+    # Seed generation based on speed
+    s_norm = speed_proj / 80.0
+    s_norm = np.clip(s_norm, 0, 1)
+    base_prob = 0.08
+    seed_mask = np.random.rand(*speed_proj.shape) < (s_norm * base_prob + 0.005)
+
+    # Filter seeds to be strictly inside the projected domain
+    # NaN Check
+    if np.isnan(x_grid_1d).any() or np.isnan(y_grid_1d).any():
+        print("WARNING: NaNs detected in projected grid!")
+    
+    # Use nanmin/nanmax
+    eps = 2000.0 
+    x_min, x_max = np.nanmin(x_grid_1d) + eps, np.nanmax(x_grid_1d) - eps
+    y_min, y_max = np.nanmin(y_grid_1d) + eps, np.nanmax(y_grid_1d) - eps
+    
+    # TEST: Use only ONE seed at the center to verify connectivity
+    # xc = x_grid_1d[len(x_grid_1d)//2]
+    # yc = y_grid_1d[len(y_grid_1d)//2]
+    # start_points = np.array([[xc, yc]])
+    
+    # Full logic with robust filter
+    pts_x = x_grid_2d[seed_mask]
+    pts_y = y_grid_2d[seed_mask]
+    
+    valid_seeds = (pts_x > x_min) & (pts_x < x_max) & \
+                  (pts_y > y_min) & (pts_y < y_max)
+                  
+    start_points = np.column_stack((pts_x[valid_seeds], pts_y[valid_seeds]))
+    
+    # Debug info
+    print(f"DEBUG: Grid X: {np.nanmin(x_grid_1d):.1f} - {np.nanmax(x_grid_1d):.1f} (Sorted? {np.all(np.diff(x_grid_1d) > 0)})")
+    print(f"DEBUG: Grid Y: {np.nanmin(y_grid_1d):.1f} - {np.nanmax(y_grid_1d):.1f} (Sorted? {np.all(np.diff(y_grid_1d) > 0)})")
+
+    # Convert to list of tuples to avoid potential numpy array issues
+    start_points_list = [tuple(p) for p in start_points]
+    
+    # Linewidth
+    lw = 0.4 + 1.2 * (speed_proj / 100.0)
+    lw = np.clip(lw, 0.4, 1.5)
+    
+    try:
+        # Plot streamplot in Mercator coordinates
+        # remove transform=proj to treat inputs as native data coordinates
+        ax.streamplot(x_grid_1d, y_grid_1d, u_proj, v_proj, 
+                  transform=None, 
                   color='black', 
-                  linewidth=0.5, 
-                  arrowsize=0.6,
-                  density=3.5)
+                  linewidth=lw, 
+                  arrowsize=0.7,
+                  arrowstyle='->',
+                  density=30, 
+                  start_points=start_points_list,
+                  maxlength=20.0)
+    except Exception as e:
+        print(f"Streamplot Failed: {e}")
+        # Fallback with higher uniform density
+        print("Using fallback streamplot with uniform density=4")
+        ax.streamplot(x_grid_1d, y_grid_1d, u_proj, v_proj, 
+                  transform=None,
+                  color='black', 
+                  linewidth=lw,
+                  density=4)
+ # Limit integration length if possible (in data coords?) check compat
+              # maxlength not always supported in older MPL. If error, remove.
+              # But user asked for "length", streamplot integration stops.
     
     # Colorbar
     cbar = plt.colorbar(cf, ax=ax, orientation='vertical', pad=0.02, shrink=0.9, aspect=25, drawedges=True)
-    cbar.ax.tick_params(labelsize=9)
+    cbar.ax.tick_params(labelsize=9, direction='in') # Ticks inside
     cbar.set_label("km/h", rotation=0, labelpad=15, y=1.02)
     
     # Titles
     try:
-        dt = datetime.strptime(time_str, "%Y%m%d_%H%M")
-        nice_date = dt.strftime("%a %d %b %Y %HUTC")
-        valid_date = f"{dt.strftime('%d.%m.%Y %HUTC')} +??h"
-    except:
-        nice_date = time_str
-        valid_date = time_str
+        dt_init = datetime.strptime(time_str, "%Y%m%d_%H%M") # Logic: Folder name is init time?
+        # Actually in 'process_timestep', tag is folder name which IS init time (20260120_1800).
+        
+        # Calculate valid time
+        match = re.search(r"_H(\d+)", out_path) # Changed regex to match filename structure more vaguely
+        if match:
+            lead_hours = int(match.group(1))
+        else:
+            lead_hours = 0
+            
+        valid_dt = dt_init + timedelta(hours=lead_hours)
+        local_dt = valid_dt + timedelta(hours=1) # CET
+        
+        # Labels
+        # Top Left: Model Run
+        title_left = f"Model Run: {dt_init.strftime('%d.%m.%Y %HUTC')}"
+        
+        # Top Right: Forecast/Valid
+        # Line 1: Forecast (Time + Lead)
+        # Line 2: Local Time
+        title_right = f"Valid: {valid_dt.strftime('%a %d %b %HUTC')} (+{lead_hours}h)\nLocal: {local_dt.strftime('%a %H:%M CET')}"
+
+    except Exception as e:
+        print(f"Title logic error: {e}")
+        title_left = f"Run: {time_str}"
+        title_right = ""
 
     gv.set_titles_and_labels(ax,
                             maintitle="",
-                            lefttitle=f"ICON-CH1-EPS\nWind on {level_name} (CTRL)\nStatistics: Max {np.max(speed_kmh):.1f} km/h",
-                            lefttitlefontsize=14,
-                            righttitle=f"{nice_date}\n{valid_date}",
-                            righttitlefontsize=14, 
+                            lefttitle=f"{title_left}\nWind on {level_name}",
+                            lefttitlefontsize=12,
+                            righttitle=title_right,
+                            righttitlefontsize=12, 
                             xlabel="",
                             ylabel="")
 
-    # Bottom Copyright
-    ax.text(0.01, 0.01, "© MeteoSwiss", transform=ax.transAxes,
-            fontsize=10, fontweight='bold', bbox=dict(facecolor='white', alpha=0.7, edgecolor='none'))
+    # Remove Bottom Copyright (User requested removal)
+    # ax.text(...) # Removed
     
     # Save
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
