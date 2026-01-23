@@ -188,10 +188,10 @@ def plot_single_level(u_grid, v_grid, lon_grid, lat_grid, level_name, time_str, 
     
     # 3. Integrate Trajectories
     # Fixed Integration Time T.
-    # Length L approx |V| * T.
-    # 10 m/s * 3600s = 36km. Map width ~300km. 36km is ~10% width. Good.
-    dt = 3600.0 # Total integration time (seconds)
-    n_steps = 5 # Number of segments per line for curvature
+    # Enforcing global consistency: Same speed = Same length across all maps.
+    dt = 3600.0 # 1 hour integration
+    
+    n_steps = 10 # Smoother curves
     h = dt / n_steps # Time step per segment
     
     # Vectorized Integration (Euler or RK2)
@@ -243,26 +243,23 @@ def plot_single_level(u_grid, v_grid, lon_grid, lat_grid, level_name, time_str, 
     ax.add_collection(lc)
     
     # 5. Add Arrows at END of trajectories
-    # Only for sufficiently long lines?
     end_pts = trajs[:, -1, :]
     prev_pts = trajs[:, -2, :] # Use second to last to determine direction
     
     arrow_dirs = end_pts - prev_pts
-    # Normalize for orientation? Quiver handles vectors.
     
     # Arrow size scaling? Fixed size usually better for aesthetics.
     # Quiver at end points.
     # U, V for quiver is delta_x, delta_y
-    
-    # Subsample arrows if too dense?
-    # Or just plot all.
+    # User feedback: Arrows too big on 10m lines.
+    # Reduced width from 0.0015 to 0.0008 to match thinner lines better.
     
     ax.quiver(end_pts[:, 0], end_pts[:, 1], arrow_dirs[:, 0], arrow_dirs[:, 1],
               transform=proj,
               color='black',
               scale=None, # Auto scale?
               angles='xy', scale_units='xy', # Use vectors as displacement
-              width=0.0015,
+              width=0.0008, 
               headwidth=4,
               headlength=5,
               headaxislength=4.5,
@@ -352,9 +349,7 @@ def process_timestep(nc_path):
     for item in data_levels:
         level_name = item['level_name']
         
-        # User request: Only 800m
-        if "800m" not in level_name:
-             continue
+        # User request: All altitude levels
              
         print(f"  Level: {level_name}")
         
@@ -372,11 +367,28 @@ def process_timestep(nc_path):
         plot_single_level(u_grid, v_grid, grid_lon, grid_lat, level_name, tag, out_path)
 
 def main():
-    search_path = os.path.join(CACHE_DIR, "**", "*.nc")
-    files = glob.glob(search_path, recursive=True)
+    # Find latest run directory
+    # CACHE_DIR structure: cache_wind/YYYYMMDD_HHMM/*.nc
+    
+    # Get all subdirectories
+    subdirs = [d for d in glob.glob(os.path.join(CACHE_DIR, "*")) if os.path.isdir(d)]
+    
+    if not subdirs:
+        print("No run directories found in cache_wind.")
+        return
+        
+    # Sort by name (timestamp)
+    latest_run = max(subdirs, key=os.path.getmtime) # Or just string sort if names are consistent format
+    # Using sorted() on names is safer for YYYYMMDD_HHMM format
+    latest_run = sorted(subdirs)[-1]
+    
+    print(f"Processing latest run: {latest_run}")
+    
+    search_path = os.path.join(latest_run, "*.nc")
+    files = glob.glob(search_path)
     
     if not files:
-        print("No .nc files found in cache_wind.")
+        print(f"No .nc files found in {latest_run}.")
         return
 
     files.sort()
