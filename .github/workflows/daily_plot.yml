@@ -60,28 +60,47 @@ jobs:
           RETENTION_DAYS: "2" # Explicitly clean up data older than 2 days in CI
         run: uv run python fetch_data.py
 
-      - name: Commit and Push Data
-        run: |
+          # 1. Setup Git Config for Large Files
           git config --global user.name "GitHub Action"
           git config --global user.email "actions@github.com"
+          git config --global http.postBuffer 524288000 # Increase buffer to 500MB to avoid RPC 500 errors
+
+          # Helper function for robust pushing
+          function robust_push() {
+            n=0
+            until [ "$n" -ge 5 ]
+            do
+               # Pull rebase to ensure we are up to date before pushing
+               git pull --rebase origin main && git push && break
+               n=$((n+1))
+               echo "Push failed. Retrying in 15 seconds... (Attempt $n/5)"
+               sleep 15
+            done
+            if [ "$n" -ge 5 ]; then
+              echo "Push failed after 5 attempts."
+              exit 1
+            fi
+          }
           
-          # 1. Ensure directories exist (fetch_data.py should create them, but for safety)
+          # 2. Ensure directories exist
           mkdir -p cache_data
           mkdir -p cache_wind
           
-          # 2. Cleanup (Now handled by fetch_data.py based on RETENTION_DAYS)
-          # We no longer use 'find -mtime' because git checkout resets file timestamps.
-          
-          # 3. Stage changes (Include BOTH folders, FORCE add because they are ignored)
+          # 3. Batch 1: Push Traces (Lighter)
           git add -f cache_data/
-          git add -f cache_wind/
-          
-          # 4. Commit and Push with Race Condition Protection
           if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "Auto-update weather data: $(date -u +'%Y-%m-%d %H:%M') UTC"
-            # CRITICAL: Pull latest changes before pushing to avoid conflicts
-            git pull --rebase origin main
-            git push
+            git commit -m "Auto-update Traces: $(date -u +'%Y-%m-%d %H:%M') UTC"
+            robust_push
           else
-            echo "No new data to commit"
+            echo "No new traces to commit"
+          fi
+
+          # 4. Batch 2: Push Wind Maps (Heavier)
+          # We push this separately to avoid one massive timeout
+          git add -f cache_wind/
+          if [ -n "$(git status --porcelain)" ]; then
+            git commit -m "Auto-update Wind Maps: $(date -u +'%Y-%m-%d %H:%M') UTC"
+            robust_push
+          else
+            echo "No new wind maps to commit"
           fi
