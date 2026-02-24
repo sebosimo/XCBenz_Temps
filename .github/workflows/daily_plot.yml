@@ -89,6 +89,7 @@ jobs:
           mkdir -p cache_wind
           
           # 3. Batch 1: Push Traces (Lighter)
+          git ls-files --deleted cache_data/ | xargs -r git rm -r --cached --
           git add -f cache_data/
           if [ -n "$(git status --porcelain)" ]; then
             git commit -m "Auto-update Traces: $(date -u +'%Y-%m-%d %H:%M') UTC"
@@ -99,6 +100,7 @@ jobs:
 
           # 4. Batch 2: Push Wind Maps (Heavier)
           # We push this separately to avoid one massive timeout
+          git ls-files --deleted cache_wind/ | xargs -r git rm -r --cached --
           git add -f cache_wind/
           if [ -n "$(git status --porcelain)" ]; then
             git commit -m "Auto-update Wind Maps: $(date -u +'%Y-%m-%d %H:%M') UTC"

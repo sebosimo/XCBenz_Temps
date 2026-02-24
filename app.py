@@ -77,7 +77,7 @@ def get_data_inventory(run_folder):
         inventory[loc] = sorted(steps)
     return inventory
 
-@st.cache_data
+@st.cache_data(ttl=1800)
 def render_time_height_plot(run_folder, location):
     """Generates a Time-Height cross-section of Lapse Rate."""
     loc_path = os.path.join(CACHE_DIR, run_folder, location)
@@ -225,7 +225,7 @@ def render_time_height_plot(run_folder, location):
     plt.subplots_adjust(bottom=0.15, top=0.98)
     return fig
 
-@st.cache_data
+@st.cache_data(ttl=3600)
 def render_custom_emagram(file_path):
     """The core plotting engine with custom skew and lapse-rate coloring."""
     ds = xr.open_dataset(file_path)
@@ -308,7 +308,11 @@ else:
     col1, col2 = st.columns([3, 1])
     with col2:
         selected_run = st.selectbox("Model Run (UTC)", runs, index=0)
-    
+
+    if st.session_state.get("_last_run") != selected_run:
+        st.session_state.forecast_index = 0
+        st.session_state["_last_run"] = selected_run
+
     inventory = get_data_inventory(selected_run)
     location_list = list(inventory.keys())
 
