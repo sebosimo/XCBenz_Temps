@@ -313,6 +313,12 @@ else:
         st.session_state.forecast_index = 0
         st.session_state["_last_run"] = selected_run
 
+    _ver_path = "data_version.txt"
+    if os.path.exists(_ver_path):
+        with open(_ver_path) as _f:
+            _ver = _f.read().strip()
+        st.caption(f"Data as of: {_ver} UTC")
+
     inventory = get_data_inventory(selected_run)
     location_list = list(inventory.keys())
 

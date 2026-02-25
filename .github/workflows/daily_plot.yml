@@ -92,6 +92,8 @@ jobs:
           git ls-files --deleted cache_data/ | xargs -r git rm -r --cached --
           git add -f cache_data/
           if [ -n "$(git status --porcelain)" ]; then
+            date -u +'%Y%m%d_%H%M' > data_version.txt
+            git add data_version.txt
             git commit -m "Auto-update Traces: $(date -u +'%Y-%m-%d %H:%M') UTC"
             robust_push
           else
