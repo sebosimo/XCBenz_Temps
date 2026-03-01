@@ -7,8 +7,11 @@ from matplotlib.colors import Normalize
 import metpy.calc as mpcalc
 from metpy.units import units
 import numpy as np
+import io
 import os
+import tempfile
 import datetime
+import requests
 
 # This makes the app use the full width of your screen
 st.set_page_config(page_title="XCBenz Therm", layout="wide")
@@ -55,36 +58,57 @@ st.markdown("""
 
 CACHE_DIR = "cache_data"
 
+_GH_REPO = "sebosimo/Data_Fetch-ICON-CH1"
+_GH_RAW  = f"https://raw.githubusercontent.com/{_GH_REPO}/main"
+
+@st.cache_data(ttl=1800)
+def _fetch_manifest():
+    """Download and cache manifest.json from GitHub for 30 min."""
+    r = requests.get(f"{_GH_RAW}/manifest.json", timeout=15)
+    r.raise_for_status()
+    return r.json()
+
+@st.cache_data(ttl=3600)
+def _gh_nc_bytes(repo_path):
+    """Download raw .nc bytes from GitHub, cached 1 hour per file."""
+    r = requests.get(f"{_GH_RAW}/{repo_path}", timeout=30)
+    r.raise_for_status()
+    return r.content
+
+def _open_nc(repo_path):
+    """Open an xarray Dataset from a GitHub repo-relative path."""
+    content = _gh_nc_bytes(repo_path)
+    with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+    try:
+        ds = xr.open_dataset(tmp_path)
+        ds.load()
+    finally:
+        os.unlink(tmp_path)
+    return ds
+
 def get_available_runs():
-    """Returns a list of run folders, newest first."""
-    if not os.path.exists(CACHE_DIR):
+    """Returns a list of run folders from GitHub manifest, newest first."""
+    try:
+        return sorted(_fetch_manifest().get("runs", {}).keys(), reverse=True)
+    except Exception:
         return []
-    runs = [d for d in os.listdir(CACHE_DIR) if os.path.isdir(os.path.join(CACHE_DIR, d))]
-    return sorted(runs, reverse=True)
 
 def get_data_inventory(run_folder):
-    """For a specific run, returns a list of locations and their available time steps."""
-    inventory = {}
-    run_path = os.path.join(CACHE_DIR, run_folder)
-    
-    if not os.path.exists(run_path):
+    """For a specific run, returns {location: [step_strings]} from GitHub manifest."""
+    try:
+        return _fetch_manifest().get("runs", {}).get(run_folder, {})
+    except Exception:
         return {}
-
-    locations = [d for d in os.listdir(run_path) if os.path.isdir(os.path.join(run_path, d))]
-    for loc in sorted(locations):
-        loc_path = os.path.join(run_path, loc)
-        steps = [f.replace(".nc", "") for f in os.listdir(loc_path) if f.endswith(".nc")]
-        inventory[loc] = sorted(steps)
-    return inventory
 
 @st.cache_data(ttl=1800)
 def render_time_height_plot(run_folder, location):
     """Generates a Time-Height cross-section of Lapse Rate."""
-    loc_path = os.path.join(CACHE_DIR, run_folder, location)
-    if not os.path.exists(loc_path): return None
-    
-    files = sorted([os.path.join(loc_path, f) for f in os.listdir(loc_path) if f.endswith(".nc")])
-    if not files: return None
+    steps = get_data_inventory(run_folder).get(location, [])
+    if not steps:
+        return None
+    github_paths = [f"{CACHE_DIR}/{run_folder}/{location}/{step}.nc" for step in steps]
 
     times = []
     heights_list = []
@@ -92,10 +116,10 @@ def render_time_height_plot(run_folder, location):
     dewpoints_list = []
     u_list = []
     v_list = []
-    
-    for f in files:
+
+    for github_path in github_paths:
         try:
-            ds = xr.open_dataset(f)
+            ds = _open_nc(github_path)
             p = ds["P"].values * units.Pa
             t = (ds["T"].values * units.K).to(units.degC)
             t_kelvin = ds["T"].values * units.K
@@ -228,7 +252,7 @@ def render_time_height_plot(run_folder, location):
 @st.cache_data(ttl=3600)
 def render_custom_emagram(file_path):
     """The core plotting engine with custom skew and lapse-rate coloring."""
-    ds = xr.open_dataset(file_path)
+    ds = _open_nc(file_path)
     
     p = ds["P"].values * units.Pa
     t = (ds["T"].values * units.K).to(units.degC)
@@ -313,11 +337,12 @@ else:
         st.session_state.forecast_index = 0
         st.session_state["_last_run"] = selected_run
 
-    _ver_path = "data_version.txt"
-    if os.path.exists(_ver_path):
-        with open(_ver_path) as _f:
-            _ver = _f.read().strip()
-        st.caption(f"Data as of: {_ver} UTC")
+    try:
+        _ver = _fetch_manifest().get("generated_at", "")
+        if _ver:
+            st.caption(f"Data as of: {_ver} UTC")
+    except Exception:
+        pass
 
     inventory = get_data_inventory(selected_run)
     location_list = list(inventory.keys())
@@ -353,10 +378,10 @@ else:
             st.session_state.forecast_index = slider_horizons.index(st.session_state.slider_key)
 
         selected_hor = slider_horizons[st.session_state.forecast_index]
-        file_to_plot = os.path.join(CACHE_DIR, selected_run, selected_loc, f"{selected_hor}.nc")
-        
+        file_to_plot = f"{CACHE_DIR}/{selected_run}/{selected_loc}/{selected_hor}.nc"
+
         # Header Info
-        ds = xr.open_dataset(file_to_plot)
+        ds = _open_nc(file_to_plot)
         if "valid_time" in ds.attrs:
             valid_dt = datetime.datetime.fromisoformat(ds.attrs["valid_time"])
         else:

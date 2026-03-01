@@ -347,7 +347,39 @@ def main():
                     try: shutil.rmtree(p)
                     except: pass
 
+    generate_manifest()
     log("--- Data Fetcher Complete ---", "NOTICE")
+
+def generate_manifest():
+    """Write manifest.json reflecting current cache_data contents."""
+    runs = {}
+    if os.path.exists(CACHE_DIR_TRACES):
+        for run in sorted(os.listdir(CACHE_DIR_TRACES), reverse=True):
+            run_path = os.path.join(CACHE_DIR_TRACES, run)
+            if not os.path.isdir(run_path):
+                continue
+            locations = {}
+            for loc in sorted(os.listdir(run_path)):
+                loc_path = os.path.join(run_path, loc)
+                if not os.path.isdir(loc_path):
+                    continue
+                steps = sorted(
+                    f.replace(".nc", "")
+                    for f in os.listdir(loc_path)
+                    if f.endswith(".nc")
+                )
+                if steps:
+                    locations[loc] = steps
+            if locations:
+                runs[run] = locations
+
+    manifest = {
+        "generated_at": max(runs.keys()) if runs else "",
+        "runs": runs,
+    }
+    with open("manifest.json", "w") as f:
+        json.dump(manifest, f)
+    log(f"Manifest written: {len(runs)} runs")
 
 def cleanup_old_runs():
     ret = os.environ.get("RETENTION_DAYS")
