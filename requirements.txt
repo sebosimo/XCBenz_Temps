@@ -1,0 +1,11 @@
+metpy
+xarray
+cfgrib
+meteodata-lab
+pandas
+matplotlib
+netCDF4
+streamlit
+geocat-viz
+requests
+numpy

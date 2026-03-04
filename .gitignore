@@ -1,0 +1,43 @@
+# Python environment
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# Data and Outputs
+data/
+*.png
+*.log
+*.csv
+debug_log.txt
+temp_*.grib2
+test_*.grib2
+debug_*.grib2
+
+# Weather Data - Ignore locally to avoid heavy pushes
+# The GitHub Action uses 'git add -f' to commit production data
+cache_data/
+cache_wind/
+static_data/
+
+# Specific scripts/debug files
+debug_availability.py
+debug_discovery.py
+debug_discovery_advanced.py
+debug_geocat.py
+debug_lakes.py
+debug_missing_vars.py
+debug_runs_at_valid_time.py
+debug_sort_order.py
+debug_variables.py
+verify_fix.py
+
+# Keep configuration files
+!locations.json
+!wind_levels.json
+
+# IDEs
+.vscode/
+.idea/
+.agent/
