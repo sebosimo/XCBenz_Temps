@@ -11,19 +11,29 @@ as emagram soundings and time-height lapse rate plots.
 
 ```
 GitHub Actions (every 30 min)
-  └─ fetch_data.py          downloads ICON-CH1 forecast data
-  └─ cache_data/{run}/...   .nc files committed to repo (force-added)
-  └─ manifest.json          index of all available runs/locations/horizons
-  └─ data_version.txt       timestamp, triggers Streamlit webhook
+  └─ fetch_data.py        downloads latest ICON-CH1 forecast from MeteoSwiss OGD
+  └─ data branch          single orphan commit, force-pushed each run
+      ├─ cache_data/      .nc files for all runs within the retention window
+      └─ manifest.json    index of all available runs / locations / horizons
+  └─ main branch          code only; data_version.txt bumped to trigger Streamlit webhook
 
 Streamlit Community Cloud
-  └─ app.py                 reads manifest.json + .nc files directly from
-                            GitHub at runtime — no redeployment needed
+  └─ app.py               reads manifest.json + .nc files from GitHub raw URLs at runtime
+                          (@st.cache_data handles in-process caching — no redeployment needed)
 ```
 
-Because the app fetches data from GitHub raw URLs at runtime (cached in-process
-with `@st.cache_data`), it always shows the latest model runs without depending on
-Streamlit container redeployment.
+The `data` branch is always a **single orphan commit** — it is force-pushed every 30 min
+with a fresh snapshot of all runs within the retention window. No blob history accumulates,
+so the `main` branch stays small and clones quickly.
+
+---
+
+## Repository structure
+
+| Branch | Contents | Updated by |
+|--------|----------|------------|
+| `main` | App code, CI workflow, config files | Manual commits + CI (`data_version.txt`) |
+| `data` | `cache_data/` `.nc` files + `manifest.json` | CI force-push every 30 min (orphan commit) |
 
 ---
 
@@ -31,36 +41,37 @@ Streamlit container redeployment.
 
 | File | Purpose |
 |------|---------|
-| `app.py` | Streamlit UI — emagram + time-height lapse rate plot |
+| `app.py` | Streamlit UI — emagram sounding + time-height lapse rate plot |
 | `fetch_data.py` | Downloads ICON-CH1 data; generates `manifest.json`; cleans up runs older than `RETENTION_DAYS` |
-| `.github/workflows/daily_plot.yml` | CI: fetch → commit → push on a 30-min schedule |
-| `manifest.json` | Auto-generated index of available runs, locations, and horizon files; read by the app at runtime |
-| `data_version.txt` | Timestamp of last data push; kept as a Streamlit auto-redeploy webhook trigger |
+| `.github/workflows/daily_plot.yml` | CI: restore data → fetch new data → push `data` branch + bump `main` |
 | `locations.json` | Flying site coordinates used by the data fetcher |
+| `data_version.txt` | Timestamp bumped on every CI run; triggers Streamlit auto-redeploy webhook |
 
 ---
 
 ## Data layout
 
 ```
-cache_data/
-  {YYYYMMDD_HHMM}/          model run timestamp (UTC)
+cache_data/               (on the data branch)
+  {YYYYMMDD_HHMM}/        model run timestamp (UTC)
     {Location}/
-      H00.nc                horizon +0 h
-      H01.nc                horizon +1 h
+      H00.nc              forecast horizon +0 h
+      H01.nc              forecast horizon +1 h
       ...
 ```
 
-`cache_data/` is gitignored but force-added by CI (`git add -f`) so it lives in the
-repo and is accessible via `raw.githubusercontent.com`.
+The app constructs raw GitHub URLs from the manifest at runtime:
+`https://raw.githubusercontent.com/{repo}/data/cache_data/{run}/{location}/H{HH}.nc`
 
 ---
 
 ## CI schedule
 
-GitHub Actions runs at `:12` and `:42` past every hour. It only commits when new
-ICON-CH1 data is available (checked via the MeteoSwiss OGD STAC API). Old runs are
-deleted after `RETENTION_DAYS=2` to keep repo size manageable.
+GitHub Actions runs at `:12` and `:42` past every hour. Before downloading new data,
+the CI restores the existing `data` branch snapshot so runs within the retention window
+are preserved. After fetching, old runs beyond `RETENTION_DAYS=2` are deleted by
+`cleanup_old_runs()`. The updated snapshot is force-pushed to the `data` branch as a
+single orphan commit.
 
 ---
 
@@ -69,9 +80,7 @@ deleted after `RETENTION_DAYS=2` to keep repo size manageable.
 ```bash
 pip install -r requirements.txt
 python fetch_data.py       # downloads data into cache_data/
-streamlit run app.py       # starts app locally
+streamlit run app.py       # starts app (reads live from GitHub by default)
 ```
 
-The app reads live from GitHub by default, so `cache_data/` is only needed if you
-want to test the fetcher locally. The deployed app on Streamlit Community Cloud never
-reads from local disk.
+`cache_data/` is gitignored locally. The deployed app never reads from local disk.
