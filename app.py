@@ -11,6 +11,7 @@ import io
 import os
 import tempfile
 import datetime
+from zoneinfo import ZoneInfo
 import requests
 
 # This makes the app use the full width of your screen
@@ -138,7 +139,8 @@ def render_time_height_plot(run_folder, location):
                 # Fallback: calc from ref_time and horizon
                 ref = datetime.datetime.fromisoformat(ds.attrs["ref_time"])
                 vt = ref + datetime.timedelta(hours=int(ds.attrs["horizon"]))
-            
+            # Convert UTC → Europe/Zurich (handles CET/CEST automatically), strip tz for matplotlib
+            vt = vt.astimezone(ZoneInfo("Europe/Zurich")).replace(tzinfo=None)
             times.append(vt)
             heights_list.append(z)
             temps_list.append(t.m)
@@ -386,7 +388,7 @@ else:
             ref = datetime.datetime.fromisoformat(ds.attrs["ref_time"])
             valid_dt = ref + datetime.timedelta(hours=int(ds.attrs["horizon"]))
         
-        swiss_dt = valid_dt + datetime.timedelta(hours=1) 
+        swiss_dt = valid_dt.astimezone(ZoneInfo("Europe/Zurich"))
 
         st.subheader(f"{selected_loc} {swiss_dt.strftime('%A %H:%M')} (LT)")
         
@@ -406,9 +408,9 @@ else:
 
             def format_slider(option):
                 try:
-                    base = datetime.datetime.strptime(selected_run, '%Y%m%d_%H%M')
+                    base = datetime.datetime.strptime(selected_run, '%Y%m%d_%H%M').replace(tzinfo=datetime.timezone.utc)
                     hrs = int(option.split('_')[-1].replace("H", ""))
-                    target = base + datetime.timedelta(hours=hrs + 1)
+                    target = (base + datetime.timedelta(hours=hrs)).astimezone(ZoneInfo("Europe/Zurich"))
                     return target.strftime('%a %H:%M')
                 except:
                     return option
