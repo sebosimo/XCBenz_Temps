@@ -180,7 +180,7 @@ def render_time_height_plot(run_folder, location):
         mask[:, i] = reg_z < s_h
     lapse_rate_masked = np.ma.masked_where(mask, lapse_rate)
 
-    fig, ax = plt.subplots(figsize=(12, 8))
+    fig, ax = plt.subplots(figsize=(12, 7))
     time_nums = mdates.date2num(times)
     X, Y = np.meshgrid(time_nums, reg_z)
     
@@ -239,15 +239,13 @@ def render_time_height_plot(run_folder, location):
     ax.tick_params(axis='both', labelsize=13)
     ax.tick_params(axis='both', labelsize=12)
     
-    cbar = plt.colorbar(c, ax=ax)
-    #cbar.set_label("Lapse Rate (°C/km)", fontsize=12)
+    cbar = plt.colorbar(c, ax=ax, orientation='horizontal', pad=0.17, aspect=50, shrink=1.0)
     cbar.set_ticks([3, 6, 9])
-    cbar.ax.set_yticklabels(['Stable (<0.3°C)', '0.6°C', 'Good (>0.9°C)'], rotation=270, va='center')
-    cbar.ax.tick_params(labelsize=13)
-    
+    cbar.ax.set_xticklabels(['Stable (<0.3°C/100m)', '0.6°C/100m', 'Good (>0.9°C/100m)'], fontsize=11)
+    cbar.ax.tick_params(labelsize=11)
+
     ax.grid(True, alpha=0.3, linestyle='--')
-    plt.tight_layout()
-    plt.subplots_adjust(bottom=0.15, top=0.98)
+    plt.subplots_adjust(bottom=0.24, top=0.98, left=0.07, right=0.99)
     buf = io.BytesIO()
     fig.savefig(buf, format='png', dpi=110)
     plt.close(fig)
