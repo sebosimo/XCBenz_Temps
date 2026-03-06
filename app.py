@@ -82,10 +82,13 @@ def _open_nc(repo_path):
     with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
         tmp.write(content)
         tmp_path = tmp.name
+    ds = None
     try:
         ds = xr.open_dataset(tmp_path)
         ds.load()
     finally:
+        if ds is not None:
+            ds.close()  # Release file handle before deletion (required on Windows)
         os.unlink(tmp_path)
     return ds
 
@@ -180,7 +183,7 @@ def render_time_height_plot(run_folder, location):
         mask[:, i] = reg_z < s_h
     lapse_rate_masked = np.ma.masked_where(mask, lapse_rate)
 
-    fig, ax = plt.subplots(figsize=(12, 7))
+    fig, ax = plt.subplots(figsize=(12, 13.5))
     time_nums = mdates.date2num(times)
     X, Y = np.meshgrid(time_nums, reg_z)
     
@@ -226,12 +229,12 @@ def render_time_height_plot(run_folder, location):
 
         day_times = [t for t in times if t.date() == day]
         if not day_times: continue
-        
+
         if len(day_times) == 1 and day_times[0] == times[-1]:
             continue
 
         t_mid = (mdates.date2num(day_times[0]) + mdates.date2num(day_times[-1])) / 2
-        ax.text(t_mid, -0.06, day.strftime('%a %d'), transform=ax.get_xaxis_transform(), 
+        ax.text(t_mid, -0.05, day.strftime('%a %d'), transform=ax.get_xaxis_transform(),
                 ha='center', va='top', fontweight='bold', fontsize=12)
 
     ax.set_ylim(0, 7)
@@ -239,13 +242,13 @@ def render_time_height_plot(run_folder, location):
     ax.tick_params(axis='both', labelsize=13)
     ax.tick_params(axis='both', labelsize=12)
     
-    cbar = plt.colorbar(c, ax=ax, orientation='horizontal', pad=0.17, aspect=50, shrink=1.0)
+    cbar = plt.colorbar(c, ax=ax, orientation='horizontal', pad=0.09, aspect=50, shrink=1.0)
     cbar.set_ticks([3, 6, 9])
     cbar.ax.set_xticklabels(['Stable (<0.3°C/100m)', '0.6°C/100m', 'Good (>0.9°C/100m)'], fontsize=11)
     cbar.ax.tick_params(labelsize=11)
 
     ax.grid(True, alpha=0.3, linestyle='--')
-    plt.subplots_adjust(bottom=0.24, top=0.98, left=0.07, right=0.99)
+    plt.subplots_adjust(bottom=0.14, top=0.99, left=0.07, right=0.99)
     buf = io.BytesIO()
     fig.savefig(buf, format='png', dpi=110)
     plt.close(fig)
