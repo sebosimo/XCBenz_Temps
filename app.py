@@ -106,7 +106,7 @@ def get_data_inventory(run_folder):
     except Exception:
         return {}
 
-@st.cache_data(ttl=1800)
+@st.cache_data(ttl=3600)
 def render_time_height_plot(run_folder, location):
     """Generates a Time-Height cross-section of Lapse Rate."""
     steps = get_data_inventory(run_folder).get(location, [])
@@ -355,7 +355,7 @@ else:
     available_horizons = inventory.get(selected_loc, [])
     
     # Filter 2-hour steps for UI slider (Emagram only)
-    slider_horizons = [h for h in available_horizons if int(h.split('_')[-1].replace("H", "")) % 2 == 0]
+    slider_horizons = available_horizons
         
     if slider_horizons:
         if 'forecast_index' not in st.session_state:

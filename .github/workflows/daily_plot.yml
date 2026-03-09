@@ -66,7 +66,6 @@ jobs:
       - name: Fetch Weather Data
         env:
           FORCE_REFRESH: ${{ github.event.inputs.force_refresh }}
-          RETENTION_DAYS: "2" # Explicitly clean up data older than 2 days in CI
         run: uv run python fetch_data.py
 
       - name: Commit and Push Data
@@ -119,5 +118,5 @@ jobs:
           else
             echo "No data to push to data branch"
           fi
-          git checkout main
+          git checkout -f main
           git branch -D data-temp

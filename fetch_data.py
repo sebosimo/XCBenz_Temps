@@ -144,8 +144,7 @@ def load_static_grid():
 def is_run_complete_locally(time_tag, locations, max_h):
     last_loc = sanitize_name(list(locations.keys())[-1])
     trace_path = os.path.join(CACHE_DIR_TRACES, time_tag, last_loc, f"H{max_h:02d}.nc")
-    map_path = os.path.join(CACHE_DIR_MAPS, time_tag, f"wind_maps_H{max_h:02d}.nc")
-    return os.path.exists(trace_path) and os.path.exists(map_path)
+    return os.path.exists(trace_path)
 
 def process_traces(fields, locations, tag, h, ref):
     sample = list(fields.values())[0]
@@ -274,7 +273,6 @@ def main():
     except Exception as e:
         log(f"Error loading wind_levels.json: {e}", "ERROR")
 
-    cleanup_old_runs() # Cleanup BEFORE downloading to free space
     download_static_files()
     if not os.path.exists("locations.json"): return
     with open("locations.json", "r", encoding="utf-8") as f: locations = json.load(f)
@@ -347,6 +345,7 @@ def main():
                     try: shutil.rmtree(p)
                     except: pass
 
+    cleanup_old_runs()
     generate_manifest()
     log("--- Data Fetcher Complete ---", "NOTICE")
 
@@ -382,17 +381,28 @@ def generate_manifest():
     log(f"Manifest written: {len(runs)} runs")
 
 def cleanup_old_runs():
-    ret = os.environ.get("RETENTION_DAYS")
-    if not ret: return
-    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=int(ret))
+    now = datetime.datetime.now(datetime.timezone.utc)
+    keep_dates = {now.date(), (now - datetime.timedelta(days=1)).date()}
     for d in [CACHE_DIR_TRACES, CACHE_DIR_MAPS]:
         if not os.path.exists(d): continue
-        for item in os.listdir(d):
+        all_runs = sorted(
+            [item for item in os.listdir(d) if os.path.isdir(os.path.join(d, item))],
+            reverse=True  # newest first
+        )
+        keep_recent = set(all_runs[:2])  # always keep the 2 most recent runs
+        for item in all_runs:
+            if item in keep_recent: continue
             path = os.path.join(d, item)
             try:
-                dt = datetime.datetime.strptime(item, "%Y%m%d_%H%M").replace(tzinfo=datetime.timezone.utc)
-                if dt < cutoff: shutil.rmtree(path)
-            except: pass
+                dt = datetime.datetime.strptime(item, "%Y%m%d_%H%M").replace(
+                    tzinfo=datetime.timezone.utc)
+            except ValueError:
+                continue
+            # Keep 03:00 anchor run from today or yesterday
+            if dt.hour == 3 and dt.minute == 0 and dt.date() in keep_dates:
+                continue
+            try: shutil.rmtree(path); log(f"Cleanup: removed {item}")
+            except Exception as e: log(f"Cleanup failed {item}: {e}", "ERROR")
 
 if __name__ == "__main__":
     main()
