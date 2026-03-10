@@ -25,7 +25,7 @@ The app reads all weather data **directly from GitHub at runtime** via `raw.gith
 | File | Purpose |
 |------|---------|
 | `app.py` | Streamlit UI — emagram + time-height plot; reads all data from GitHub at runtime |
-| `fetch_data.py` | Downloads ICON-CH1 data; `generate_manifest()` writes `manifest.json`; `cleanup_old_runs()` deletes folders older than `RETENTION_DAYS` |
+| `fetch_data.py` | Downloads ICON-CH1 data; `generate_manifest()` writes `manifest.json`; `cleanup_old_runs()` keeps the 2 most recent runs + today/yesterday's 03:00 anchor run |
 | `.github/workflows/daily_plot.yml` | CI: fetch → commit `data_version.txt` to `main` → orphan-push data to `data` branch |
 | `data_version.txt` | Timestamp of last data push; triggers Streamlit redeployment (tracked on `main`) |
 | `manifest.json` | Lists all available runs/locations/horizons; lives on `data` branch only |
@@ -59,7 +59,7 @@ git add -f cache_wind/
 git add manifest.json
 git commit -m "Data snapshot: ..."
 git push origin HEAD:data --force
-git checkout main
+git checkout -f main
 git branch -D data-temp
 ```
 
@@ -72,17 +72,20 @@ git branch -D data-temp
 | `data` branch — single orphan commit, force-pushed | Prevents `.nc` blob history from accumulating on `main`; repo stays small forever |
 | `_GH_RAW` points to `data` branch | App reads manifest and `.nc` files from the always-current data snapshot |
 | Plots cached as PNG bytes (`io.BytesIO`) | Avoids matplotlib double-free crash when `@st.cache_data` returns a closed figure |
-| `@st.cache_data(ttl=1800)` on `render_time_height_plot` | CI runs every 30 min; TTL matches so plots expire and re-render |
+| `@st.cache_data(ttl=3600)` on `render_time_height_plot` | New data arrives every ~3h; 1h TTL is sufficient |
 | `@st.cache_data(ttl=3600)` on `render_custom_emagram` | Emagram files don't change once written; 1-hour TTL is safe |
 | `_last_run` in `st.session_state` | Resets `forecast_index` to 0 when user switches model run |
 | `data_version.txt` committed to `main` with each CI run | Triggers Streamlit auto-redeployment webhook |
-| `RETENTION_DAYS=2` in CI env | Keeps only last 2 days of runs in the data snapshot |
+| Retain top-2 runs + today/yesterday 03:00 anchor | 03:00 run has longest forecast (H00–H45); top-2 ensures fallback if latest is incomplete |
+| `is_run_complete_locally` checks trace file only | `process_wind_maps` is disabled; checking for wind maps caused unconditional re-downloads |
+| `cleanup_old_runs` called after download, not before | Prevents deleting the previous run before the new one is confirmed complete |
+| Emagram slider uses all hourly horizons | Removed `% 2 == 0` filter; ICON-CH1 provides hourly steps, no need to thin the slider |
 
 ---
 
 ## GitHub
 
-- Repo: `sebosimo/Data_Fetch-ICON-CH1`
+- Repo: `sebosimo/XCBenz_Temps`
 - Branch: `main` (code), `data` (weather data snapshots)
 - Never force-push to `main`
 - Force-pushing `data` is normal and expected

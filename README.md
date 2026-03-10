@@ -42,7 +42,7 @@ so the `main` branch stays small and clones quickly.
 | File | Purpose |
 |------|---------|
 | `app.py` | Streamlit UI — emagram sounding + time-height lapse rate plot |
-| `fetch_data.py` | Downloads ICON-CH1 data; generates `manifest.json`; cleans up runs older than `RETENTION_DAYS` |
+| `fetch_data.py` | Downloads ICON-CH1 data; generates `manifest.json`; keeps the 2 most recent runs + today/yesterday's 03:00 anchor |
 | `.github/workflows/daily_plot.yml` | CI: restore data → fetch new data → push `data` branch + bump `main` |
 | `locations.json` | Flying site coordinates used by the data fetcher |
 | `data_version.txt` | Timestamp bumped on every CI run; triggers Streamlit auto-redeploy webhook |
@@ -67,10 +67,11 @@ The app constructs raw GitHub URLs from the manifest at runtime:
 
 ## CI schedule
 
-GitHub Actions runs at `:12` and `:42` past every hour. Before downloading new data,
-the CI restores the existing `data` branch snapshot so runs within the retention window
-are preserved. After fetching, old runs beyond `RETENTION_DAYS=2` are deleted by
-`cleanup_old_runs()`. The updated snapshot is force-pushed to the `data` branch as a
+GitHub Actions runs at `:12` and `:42` past every hour. Before downloading, CI restores
+the existing `data` branch snapshot. If the latest ICON-CH1 run is already fully present
+on disk, the download is skipped entirely. After fetching, `cleanup_old_runs()` keeps
+only the 2 most recent runs plus the 03:00 run from today and yesterday (the longest
+forecast, H00–H45). The updated snapshot is force-pushed to the `data` branch as a
 single orphan commit.
 
 ---
