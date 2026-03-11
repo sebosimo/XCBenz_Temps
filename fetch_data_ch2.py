@@ -61,22 +61,27 @@ def log(msg, level="INFO"):
     print(f"{timestamp} [{level}] {msg}", flush=True)
 
 
-def download_file(url, target_path, max_retries=3):
-    backoff = 2
+def download_file(url, target_path, max_retries=3, max_seconds=90):
+    """Download url to target_path. Aborts if total download exceeds max_seconds."""
     for attempt in range(max_retries):
         try:
             log(f"Downloading {url} to {target_path}...")
-            with requests.get(url, stream=True, timeout=60) as r:
+            deadline = time.time() + max_seconds
+            with requests.get(url, stream=True, timeout=30) as r:
                 r.raise_for_status()
                 with open(target_path, 'wb') as f:
                     for chunk in r.iter_content(chunk_size=1024 * 1024):
+                        if time.time() > deadline:
+                            raise TimeoutError(f"Download exceeded {max_seconds}s — aborting")
                         f.write(chunk)
             log(f"Download complete: {target_path}")
             return True
         except Exception as e:
             log(f"Download attempt {attempt + 1} failed: {e}", "ERROR")
+            if os.path.exists(target_path):
+                os.remove(target_path)  # clean up partial file before retry
             if attempt < max_retries - 1:
-                time.sleep(backoff ** attempt)
+                time.sleep(2 ** attempt)
     return False
 
 

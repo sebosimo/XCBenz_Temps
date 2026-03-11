@@ -99,6 +99,13 @@ def get_available_runs():
     except Exception:
         return []
 
+def get_available_ch2_runs():
+    """Returns a list of CH2 run folders from manifest, newest first."""
+    try:
+        return sorted(_fetch_manifest().get("runs_ch2", {}).keys(), reverse=True)
+    except Exception:
+        return []
+
 def get_data_inventory(run_folder):
     """For a specific run, returns {location: [step_strings]} from GitHub manifest."""
     try:
@@ -514,9 +521,18 @@ runs = get_available_runs()
 if not runs:
     st.error("No data found. Please run fetch_data.py or pull data from GitHub.")
 else:
-    col_run, col_site = st.columns([1, 3])
+    ch2_runs = get_available_ch2_runs()
+    col_run, col_ch2 = st.columns(2)
     with col_run:
-        selected_run = st.selectbox("Model Run (UTC)", runs, index=0)
+        selected_run = st.selectbox("CH1 Run (UTC)", runs, index=0)
+    with col_ch2:
+        if ch2_runs:
+            default_ch2 = find_matching_ch2_run(selected_run)
+            default_idx = ch2_runs.index(default_ch2) if default_ch2 in ch2_runs else 0
+            ch2_run_tag = st.selectbox("CH2 Run (UTC)", ch2_runs, index=default_idx)
+        else:
+            st.selectbox("CH2 Run (UTC)", ["No data yet"], disabled=True)
+            ch2_run_tag = None
 
     if st.session_state.get("_last_run") != selected_run:
         st.session_state.forecast_index = 0
@@ -525,14 +541,11 @@ else:
     inventory = get_data_inventory(selected_run)
     location_list = list(inventory.keys())
 
-    with col_site:
-        selected_loc = st.selectbox("Select Flying Site", location_list,
-                                    index=location_list.index("Sion") if "Sion" in location_list else 0)
+    selected_loc = st.selectbox("Select Flying Site", location_list,
+                                index=location_list.index("Sion") if "Sion" in location_list else 0)
 
     available_horizons = inventory.get(selected_loc, [])
 
-    # CH2 extension: find matching run and compute steps beyond CH1
-    ch2_run_tag = find_matching_ch2_run(selected_run)
     ch2_inventory = get_ch2_data_inventory(ch2_run_tag) if ch2_run_tag else {}
     ch2_extension_steps = get_ch2_extension_steps(
         selected_run, ch2_run_tag, ch2_inventory, selected_loc
@@ -585,8 +598,8 @@ else:
         st.subheader(f"{selected_loc} {swiss_dt.strftime('%A %H:%M')} (LT) · {source_label}")
         
         # --- TABS LOGIC ---
-        tab1, tab2 = st.tabs(["📈 Sounding-Wind", "📅 Lapsrate-Time"])
-        
+        tab1, tab2, tab3 = st.tabs(["📈 Sounding-Wind", "📅 CH1 (~33h)", "📅 CH2 (5-day)"])
+
         with tab1:
             with st.spinner("Generating Emagram..."):
                 img = render_custom_emagram(file_to_plot)
@@ -624,36 +637,29 @@ else:
             )
 
         with tab2:
-            plot_mode = st.radio(
-                "Model",
-                ["ICON-CH1 (~33h)", "ICON-CH2 (5-day)"],
-                horizontal=True,
-                label_visibility="collapsed",
-            )
-
-            if plot_mode.startswith("ICON-CH1"):
-                with st.spinner("Calculating full day evolution..."):
-                    img_time = render_time_height_plot(selected_run, selected_loc)
-                    if img_time:
-                        st.image(img_time, use_container_width=True)
-                    else:
-                        st.error("Could not generate overview. Ensure data is available.")
-            else:
-                if ch2_run_tag:
-                    ch2_all_steps = tuple(ch2_inventory.get(selected_loc, []))
-                    if ch2_all_steps:
-                        with st.spinner("Loading 5-day ICON-CH2 forecast..."):
-                            img_ch2 = render_ch2_time_height_plot(
-                                ch2_run_tag, selected_loc, ch2_all_steps
-                            )
-                            if img_ch2:
-                                st.image(img_ch2, use_container_width=True)
-                            else:
-                                st.error("Could not generate CH2 plot.")
-                    else:
-                        st.info("No CH2 data for this location yet.")
+            with st.spinner("Calculating full day evolution..."):
+                img_time = render_time_height_plot(selected_run, selected_loc)
+                if img_time:
+                    st.image(img_time, use_container_width=True)
                 else:
-                    st.info("No ICON-CH2 data available yet. It will appear after the next CI run that fetches a new CH2 run.")
+                    st.error("Could not generate overview. Ensure data is available.")
+
+        with tab3:
+            if ch2_run_tag:
+                ch2_all_steps = tuple(ch2_inventory.get(selected_loc, []))
+                if ch2_all_steps:
+                    with st.spinner("Loading 5-day ICON-CH2 forecast..."):
+                        img_ch2 = render_ch2_time_height_plot(
+                            ch2_run_tag, selected_loc, ch2_all_steps
+                        )
+                        if img_ch2:
+                            st.image(img_ch2, use_container_width=True)
+                        else:
+                            st.error("Could not generate CH2 plot.")
+                else:
+                    st.info("No CH2 data for this location yet.")
+            else:
+                st.info("No ICON-CH2 data available yet. It will appear after the next CI run that fetches a new CH2 run.")
             
     else:
         st.warning("No time steps found for this location.")
