@@ -62,6 +62,9 @@ jobs:
           git checkout FETCH_HEAD -- cache_data/      2>/dev/null || true
           git checkout FETCH_HEAD -- cache_wind/      2>/dev/null || true
           git checkout FETCH_HEAD -- cache_data_ch2/  2>/dev/null || true
+          # Unstage immediately — files are needed on disk but must NOT be staged
+          # on the main branch index (causes rebase conflicts in the commit step below)
+          git reset HEAD -- cache_data/ cache_wind/ cache_data_ch2/ manifest.json 2>/dev/null || true
           echo "CH1 .nc files: $(find cache_data -name '*.nc' 2>/dev/null | wc -l)"
           echo "CH2 .nc files: $(find cache_data_ch2 -name '*.nc' 2>/dev/null | wc -l)"
 
