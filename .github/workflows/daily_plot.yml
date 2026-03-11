@@ -56,17 +56,26 @@ jobs:
 
       - name: Restore cached data from data branch
         run: |
-          # Pull existing cache_data from the data branch so that fetch_data.py
-          # sees previous runs and cleanup_old_runs() keeps the full retention window.
+          # Pull existing cache_data and cache_data_ch2 from the data branch so that
+          # fetch_data.py / fetch_data_ch2.py see previous runs for retention logic.
           git fetch --depth=1 origin data 2>/dev/null || echo "data branch not found yet — starting fresh"
-          git checkout FETCH_HEAD -- cache_data/ 2>/dev/null || true
-          git checkout FETCH_HEAD -- cache_wind/ 2>/dev/null || true
-          echo "Restored $(find cache_data -name '*.nc' 2>/dev/null | wc -l) .nc files from data branch"
+          git checkout FETCH_HEAD -- cache_data/      2>/dev/null || true
+          git checkout FETCH_HEAD -- cache_wind/      2>/dev/null || true
+          git checkout FETCH_HEAD -- cache_data_ch2/  2>/dev/null || true
+          echo "CH1 .nc files: $(find cache_data -name '*.nc' 2>/dev/null | wc -l)"
+          echo "CH2 .nc files: $(find cache_data_ch2 -name '*.nc' 2>/dev/null | wc -l)"
 
-      - name: Fetch Weather Data
+      - name: Fetch CH1 Weather Data
         env:
           FORCE_REFRESH: ${{ github.event.inputs.force_refresh }}
         run: uv run python fetch_data.py
+
+      - name: Fetch CH2 Weather Data
+        continue-on-error: true
+        run: uv run python fetch_data_ch2.py
+
+      - name: Generate Combined Manifest
+        run: uv run python generate_combined_manifest.py
 
       - name: Commit and Push Data
         run: |
@@ -95,9 +104,10 @@ jobs:
 
           # 2. Main branch: remove data files from tracking (one-time transition on first run,
           #    no-op on subsequent runs), bump data_version.txt to trigger Streamlit webhook
-          git rm -rf --cached cache_data/ 2>/dev/null || true
-          git rm -rf --cached cache_wind/ 2>/dev/null || true
-          git rm --cached manifest.json 2>/dev/null || true
+          git rm -rf --cached cache_data/     2>/dev/null || true
+          git rm -rf --cached cache_wind/     2>/dev/null || true
+          git rm -rf --cached cache_data_ch2/ 2>/dev/null || true
+          git rm --cached manifest.json       2>/dev/null || true
           date -u +'%Y%m%d_%H%M' > data_version.txt
           git add data_version.txt
           if [ -n "$(git status --porcelain)" ]; then
@@ -111,6 +121,7 @@ jobs:
           git rm -rf --cached . 2>/dev/null || true
           git add -f cache_data/
           git add -f cache_wind/
+          git add -f cache_data_ch2/
           git add manifest.json
           if [ -n "$(git status --porcelain)" ]; then
             git commit -m "Data snapshot: $(date -u +'%Y-%m-%d %H:%M') UTC"

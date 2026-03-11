@@ -346,7 +346,7 @@ def main():
                     except: pass
 
     cleanup_old_runs()
-    generate_manifest()
+    # Manifest is now written by generate_combined_manifest.py (CI step after CH2 fetch)
     log("--- Data Fetcher Complete ---", "NOTICE")
 
 def generate_manifest():

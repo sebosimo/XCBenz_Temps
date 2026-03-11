@@ -106,6 +106,44 @@ def get_data_inventory(run_folder):
     except Exception:
         return {}
 
+def get_ch2_data_inventory(run_folder):
+    """For a specific CH2 run, returns {location: [step_strings]} from manifest."""
+    try:
+        return _fetch_manifest().get("runs_ch2", {}).get(run_folder, {})
+    except Exception:
+        return {}
+
+def find_matching_ch2_run(ch1_run_tag):
+    """Return the most recent CH2 run whose ref_time is <= the CH1 run's ref_time."""
+    try:
+        ch1_ref = datetime.datetime.strptime(ch1_run_tag, '%Y%m%d_%H%M')
+        ch2_runs = sorted(
+            _fetch_manifest().get("runs_ch2", {}).keys(), reverse=True
+        )
+        for ch2_tag in ch2_runs:
+            if datetime.datetime.strptime(ch2_tag, '%Y%m%d_%H%M') <= ch1_ref:
+                return ch2_tag
+    except Exception:
+        pass
+    return None
+
+def get_ch2_extension_steps(ch1_run_tag, ch2_run_tag, ch2_inv, location):
+    """Return CH2 step labels whose valid_time is strictly after the last CH1 valid_time."""
+    ch1_steps = get_data_inventory(ch1_run_tag).get(location, [])
+    if not ch1_steps or not ch2_run_tag:
+        return []
+    try:
+        ch1_ref = datetime.datetime.strptime(ch1_run_tag, '%Y%m%d_%H%M')
+        ch2_ref = datetime.datetime.strptime(ch2_run_tag, '%Y%m%d_%H%M')
+        last_h = int(ch1_steps[-1].replace("H", ""))
+        cutoff = ch1_ref + datetime.timedelta(hours=last_h)
+        return [
+            s for s in ch2_inv.get(location, [])
+            if ch2_ref + datetime.timedelta(hours=int(s.replace("H", ""))) > cutoff
+        ]
+    except Exception:
+        return []
+
 @st.cache_data(ttl=3600)
 def render_time_height_plot(run_folder, location):
     """Generates a Time-Height cross-section of Lapse Rate."""
@@ -254,6 +292,145 @@ def render_time_height_plot(run_folder, location):
     plt.close(fig)
     return buf.getvalue()
 
+@st.cache_data(ttl=21600)
+def render_ch2_time_height_plot(run_folder, location, steps_tuple):
+    """5-day CH2 Time-Height lapse rate plot. steps_tuple is a tuple for cache-key stability."""
+    steps = list(steps_tuple)
+    if not steps:
+        return None
+    github_paths = [f"cache_data_ch2/{run_folder}/{location}/{step}.nc" for step in steps]
+
+    times = []
+    heights_list = []
+    temps_list = []
+    dewpoints_list = []
+    u_list = []
+    v_list = []
+
+    for github_path in github_paths:
+        try:
+            ds = _open_nc(github_path)
+            p = ds["P"].values * units.Pa
+            t_kelvin = ds["T"].values * units.K
+            t = t_kelvin.to(units.degC)
+            qv = ds["QV"].values * units('kg/kg')
+            u_val = (ds["U"].values * units('m/s')).to('km/h').m
+            v_val = (ds["V"].values * units('m/s')).to('km/h').m
+            td = mpcalc.dewpoint_from_specific_humidity(p, t_kelvin, qv).to(units.degC)
+            if "HEIGHT" in ds:
+                z = (ds["HEIGHT"].values * units.m).to(units.km).m
+            else:
+                z = mpcalc.pressure_to_height_std(p).to(units.km).m
+            if "valid_time" in ds.attrs:
+                vt = datetime.datetime.fromisoformat(ds.attrs["valid_time"])
+            else:
+                ref = datetime.datetime.fromisoformat(ds.attrs["ref_time"])
+                vt = ref + datetime.timedelta(hours=int(ds.attrs["horizon"]))
+            vt = vt.astimezone(ZoneInfo("Europe/Zurich")).replace(tzinfo=None)
+            times.append(vt)
+            heights_list.append(z)
+            temps_list.append(t.m)
+            dewpoints_list.append(td.m)
+            u_list.append(u_val)
+            v_list.append(v_val)
+        except Exception:
+            continue
+
+    if not times:
+        return None
+
+    reg_z = np.arange(0, 7.05, 0.05)
+    reg_t = np.zeros((len(reg_z), len(times)))
+    reg_td = np.zeros((len(reg_z), len(times)))
+    reg_u = np.zeros((len(reg_z), len(times)))
+    reg_v = np.zeros((len(reg_z), len(times)))
+
+    for i in range(len(times)):
+        sort_idx = np.argsort(heights_list[i])
+        reg_t[:, i]  = np.interp(reg_z, heights_list[i][sort_idx], temps_list[i][sort_idx])
+        reg_td[:, i] = np.interp(reg_z, heights_list[i][sort_idx], dewpoints_list[i][sort_idx])
+        reg_u[:, i]  = np.interp(reg_z, heights_list[i][sort_idx], u_list[i][sort_idx])
+        reg_v[:, i]  = np.interp(reg_z, heights_list[i][sort_idx], v_list[i][sort_idx])
+
+    dt_dz = -np.gradient(reg_t, axis=0) / 0.05
+    lapse_rate = dt_dz
+
+    surface_heights = [np.min(h) for h in heights_list]
+    mask = np.zeros_like(lapse_rate, dtype=bool)
+    for i, s_h in enumerate(surface_heights):
+        mask[:, i] = reg_z < s_h
+    lapse_rate_masked = np.ma.masked_where(mask, lapse_rate)
+
+    fig, ax = plt.subplots(figsize=(16, 13.5))
+    time_nums = mdates.date2num(times)
+    X, Y = np.meshgrid(time_nums, reg_z)
+
+    levels = np.linspace(3, 9, 100)
+    cmap = plt.get_cmap("RdYlGn")
+    c = ax.contourf(X, Y, lapse_rate_masked, levels=levels, cmap=cmap, extend='both')
+
+    # Cloud overlay
+    depression = reg_t - reg_td
+    depression_masked = np.ma.masked_where(mask, depression)
+    ax.contourf(X, Y, depression_masked, levels=[-100, 1.0], colors=['#778899'], alpha=0.6)
+
+    # Wind barbs
+    reg_u_masked = np.ma.masked_where(mask, reg_u)
+    reg_v_masked = np.ma.masked_where(mask, reg_v)
+    skip_z = 10
+    skip_t = 3   # sparser for 5-day range
+    ax.barbs(X[::skip_z, ::skip_t], Y[::skip_z, ::skip_t],
+             reg_u_masked[::skip_z, ::skip_t], reg_v_masked[::skip_z, ::skip_t],
+             length=5, color='#444444', alpha=0.5, linewidth=0.8)
+
+    ax.xaxis_date()
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%a %H:%M'))
+    ax.fill_between(time_nums, 0, surface_heights, color='#e0e0e0', zorder=2)
+
+    ax.xaxis.set_major_locator(mdates.HourLocator(interval=6))
+    ax.xaxis.set_minor_locator(mdates.HourLocator(interval=3))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+
+    unique_days = sorted(list(set(t.date() for t in times)))
+    for day in unique_days:
+        midnight = datetime.datetime.combine(day, datetime.time.min)
+        if times[0] <= midnight <= times[-1]:
+            ax.plot([mdates.date2num(midnight)] * 2, [-0.08, -0.04],
+                    color='black', linewidth=1,
+                    transform=ax.get_xaxis_transform(), clip_on=False)
+        day_times = [t for t in times if t.date() == day]
+        if not day_times:
+            continue
+        if len(day_times) == 1 and day_times[0] == times[-1]:
+            continue
+        t_mid = (mdates.date2num(day_times[0]) + mdates.date2num(day_times[-1])) / 2
+        ax.text(t_mid, -0.05, day.strftime('%a %d'),
+                transform=ax.get_xaxis_transform(),
+                ha='center', va='top', fontweight='bold', fontsize=12)
+
+    # Model label
+    ax.text(0.01, 0.98, "ICON-CH2 · 5-day", transform=ax.transAxes,
+            fontsize=11, color='white', va='top',
+            bbox=dict(boxstyle='round,pad=0.3', fc='#333333', alpha=0.7))
+
+    ax.set_ylim(0, 7)
+    ax.set_ylabel("Altitude (km)", fontsize=14)
+    ax.tick_params(axis='both', labelsize=12)
+
+    cbar = plt.colorbar(c, ax=ax, orientation='horizontal', pad=0.09, aspect=50, shrink=1.0)
+    cbar.set_ticks([3, 6, 9])
+    cbar.ax.set_xticklabels(['Stable (<0.3°C/100m)', '0.6°C/100m', 'Good (>0.9°C/100m)'],
+                            fontsize=11)
+    cbar.ax.tick_params(labelsize=11)
+
+    ax.grid(True, alpha=0.3, linestyle='--')
+    plt.subplots_adjust(bottom=0.14, top=0.99, left=0.06, right=0.99)
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', dpi=110)
+    plt.close(fig)
+    return buf.getvalue()
+
+
 @st.cache_data(ttl=3600)
 def render_custom_emagram(file_path):
     """The core plotting engine with custom skew and lapse-rate coloring."""
@@ -353,10 +530,17 @@ else:
                                     index=location_list.index("Sion") if "Sion" in location_list else 0)
 
     available_horizons = inventory.get(selected_loc, [])
-    
-    # Filter 2-hour steps for UI slider (Emagram only)
-    slider_horizons = available_horizons
-        
+
+    # CH2 extension: find matching run and compute steps beyond CH1
+    ch2_run_tag = find_matching_ch2_run(selected_run)
+    ch2_inventory = get_ch2_data_inventory(ch2_run_tag) if ch2_run_tag else {}
+    ch2_extension_steps = get_ch2_extension_steps(
+        selected_run, ch2_run_tag, ch2_inventory, selected_loc
+    )
+
+    # Combined slider: CH1 steps first, then CH2 extension (tagged with "CH2:" prefix)
+    slider_horizons = available_horizons + [f"CH2:{s}" for s in ch2_extension_steps]
+
     if slider_horizons:
         if 'forecast_index' not in st.session_state:
             st.session_state.forecast_index = 0
@@ -379,7 +563,13 @@ else:
             st.session_state.forecast_index = slider_horizons.index(st.session_state.slider_key)
 
         selected_hor = slider_horizons[st.session_state.forecast_index]
-        file_to_plot = f"{CACHE_DIR}/{selected_run}/{selected_loc}/{selected_hor}.nc"
+
+        # Route file path: CH2-prefixed steps read from cache_data_ch2/
+        if selected_hor.startswith("CH2:"):
+            step = selected_hor[4:]   # e.g. "H034"
+            file_to_plot = f"cache_data_ch2/{ch2_run_tag}/{selected_loc}/{step}.nc"
+        else:
+            file_to_plot = f"{CACHE_DIR}/{selected_run}/{selected_loc}/{selected_hor}.nc"
 
         # Header Info
         ds = _open_nc(file_to_plot)
@@ -388,10 +578,11 @@ else:
         else:
             ref = datetime.datetime.fromisoformat(ds.attrs["ref_time"])
             valid_dt = ref + datetime.timedelta(hours=int(ds.attrs["horizon"]))
-        
-        swiss_dt = valid_dt.astimezone(ZoneInfo("Europe/Zurich"))
 
-        st.subheader(f"{selected_loc} {swiss_dt.strftime('%A %H:%M')} (LT)")
+        swiss_dt = valid_dt.astimezone(ZoneInfo("Europe/Zurich"))
+        source_label = "ICON-CH2" if selected_hor.startswith("CH2:") else "ICON-CH1"
+
+        st.subheader(f"{selected_loc} {swiss_dt.strftime('%A %H:%M')} (LT) · {source_label}")
         
         # --- TABS LOGIC ---
         tab1, tab2 = st.tabs(["📈 Sounding-Wind", "📅 Lapsrate-Time"])
@@ -409,11 +600,18 @@ else:
 
             def format_slider(option):
                 try:
-                    base = datetime.datetime.strptime(selected_run, '%Y%m%d_%H%M').replace(tzinfo=datetime.timezone.utc)
-                    hrs = int(option.split('_')[-1].replace("H", ""))
+                    if option.startswith("CH2:"):
+                        step = option[4:]   # e.g. "H034"
+                        base = datetime.datetime.strptime(ch2_run_tag, '%Y%m%d_%H%M').replace(
+                            tzinfo=datetime.timezone.utc)
+                        hrs = int(step.replace("H", ""))
+                    else:
+                        base = datetime.datetime.strptime(selected_run, '%Y%m%d_%H%M').replace(
+                            tzinfo=datetime.timezone.utc)
+                        hrs = int(option.replace("H", ""))
                     target = (base + datetime.timedelta(hours=hrs)).astimezone(ZoneInfo("Europe/Zurich"))
                     return target.strftime('%a %H:%M')
-                except:
+                except Exception:
                     return option
 
             st.select_slider(
@@ -426,12 +624,36 @@ else:
             )
 
         with tab2:
-            with st.spinner("Calculating full day evolution..."):
-                img_time = render_time_height_plot(selected_run, selected_loc)
-                if img_time:
-                    st.image(img_time, use_container_width=True)
+            plot_mode = st.radio(
+                "Model",
+                ["ICON-CH1 (~33h)", "ICON-CH2 (5-day)"],
+                horizontal=True,
+                label_visibility="collapsed",
+            )
+
+            if plot_mode.startswith("ICON-CH1"):
+                with st.spinner("Calculating full day evolution..."):
+                    img_time = render_time_height_plot(selected_run, selected_loc)
+                    if img_time:
+                        st.image(img_time, use_container_width=True)
+                    else:
+                        st.error("Could not generate overview. Ensure data is available.")
+            else:
+                if ch2_run_tag:
+                    ch2_all_steps = tuple(ch2_inventory.get(selected_loc, []))
+                    if ch2_all_steps:
+                        with st.spinner("Loading 5-day ICON-CH2 forecast..."):
+                            img_ch2 = render_ch2_time_height_plot(
+                                ch2_run_tag, selected_loc, ch2_all_steps
+                            )
+                            if img_ch2:
+                                st.image(img_ch2, use_container_width=True)
+                            else:
+                                st.error("Could not generate CH2 plot.")
+                    else:
+                        st.info("No CH2 data for this location yet.")
                 else:
-                    st.error("Could not generate overview. Ensure data is available.")
+                    st.info("No ICON-CH2 data available yet. It will appear after the next CI run that fetches a new CH2 run.")
             
     else:
         st.warning("No time steps found for this location.")
